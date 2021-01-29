@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
 	"github.com/orcaman/writerseeker"
@@ -119,5 +120,101 @@ func DecodeSilkBuffToWave(src []byte, sampleRate int) (dst []byte, err error) {
 		return
 	}
 	dst, err = ioutil.ReadAll(out.Reader())
+	return
+}
+
+func EncodeWavBuffToSilk(src []byte, bitRate int, tencent bool) (dst []byte, err error) {
+	var tls = libc.NewTLS()
+	var reader = bytes.NewBuffer(src)
+	var encControl internal.SKP_SILK_SDK_EncControlStruct
+	var encStatus internal.SKP_SILK_SDK_EncControlStruct
+	var smplsSinceLastPacket int32
+	var packetSizeMs = int32(20)
+	const (
+		ApiFsHz        = int32(24000)
+		targetRateBps  = 24000
+		packetLossPerc = int32(0)
+	)
+	{ // default setting
+		encControl.FAPI_sampleRate = 24000
+		encControl.FmaxInternalSampleRate = 24000
+		encControl.FpacketSize = (packetSizeMs * ApiFsHz) / 1000
+		encControl.FpacketLossPercentage = packetLossPerc
+		encControl.FuseDTX = 0
+		encControl.Fcomplexity = 2
+		encControl.FbitRate = int32(targetRateBps)
+		encControl.FAPI_sampleRate = 24000
+		encControl.FbitRate = int32(bitRate)
+	}
+	var encSizeBytes int32
+	ret := internal.SKP_Silk_SDK_Get_Encoder_Size(tls, uintptr(unsafe.Pointer(&encSizeBytes)))
+	if ret != 0 {
+		return nil, fmt.Errorf("SKP_Silk_create_encoder returned %d", ret)
+	}
+	psEnc := libc.Xmalloc(tls, types.Size_t(encSizeBytes))
+	defer libc.Xfree(tls, psEnc)
+	ret = internal.SKP_Silk_SDK_InitEncoder(tls, psEnc, uintptr(unsafe.Pointer(&encStatus)))
+	if ret != 0 {
+		return nil, fmt.Errorf("SKP_Silk_reset_encoder returned %d", ret)
+	}
+	const frameSize = 24000 / 1000 * 40
+	var (
+		nBytes  = int16(250 * 5)
+		in      = make([]byte, frameSize)
+		payload = make([]byte, nBytes)
+		out     = writerseeker.WriterSeeker{}
+	)
+	smplsSinceLastPacket = 0
+	if tencent {
+		_, _ = out.Write([]byte("\x02#!SILK_V3"))
+	} else {
+		_, _ = out.Write([]byte("#!SILK_V3"))
+	}
+	defer func() {
+		dst, _ = ioutil.ReadAll(out.BytesReader())
+	}()
+	var counter int
+	for {
+		counter, err = reader.Read(in)
+		if err != nil {
+			if err == io.EOF {
+				err = nil
+				break
+			}
+			return
+		}
+		if counter < frameSize {
+			break
+		}
+		nBytes = 250 * 5
+		ret = internal.SKP_Silk_SDK_Encode(
+			tls,
+			psEnc,
+			uintptr(unsafe.Pointer(&encControl)),
+			uintptr(unsafe.Pointer(&in[0])),
+			int32(counter),
+			uintptr(unsafe.Pointer(&payload[0])),
+			uintptr(unsafe.Pointer(&nBytes)),
+		)
+
+		if ret != 0 {
+			return nil, fmt.Errorf("SKP_Silk_Encode returned %d", ret)
+		}
+
+		packetSizeMs = (1000 * encControl.FpacketSize) / encControl.FAPI_sampleRate
+		smplsSinceLastPacket += int32(counter)
+		if ((1000 * smplsSinceLastPacket) / ApiFsHz) == packetSizeMs {
+			var nByte = make([]byte, 2)
+			binary.LittleEndian.PutUint16(nByte, uint16(nBytes))
+			_, _ = out.Write(nByte[:2])
+			_, _ = out.Write(payload[:nBytes])
+			smplsSinceLastPacket = 0
+		}
+	}
+	if !tencent {
+		var b []byte
+		binary.LittleEndian.PutUint16(b, ^uint16(0)) // -1
+		_, _ = out.Write(b)
+	}
 	return
 }
