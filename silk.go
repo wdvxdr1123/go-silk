@@ -8,7 +8,7 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/wdvxdr/go-silk/internal"
+	"github.com/wdvxdr1123/go-silk/internal"
 	"modernc.org/libc"
 	"modernc.org/libc/sys/types"
 )
