@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"silk/internal"
 	"unsafe"
 
+	"github.com/wdvxdr/go-silk/internal"
 	"modernc.org/libc"
 	"modernc.org/libc/sys/types"
 )
