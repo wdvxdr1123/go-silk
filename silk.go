@@ -5,15 +5,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/go-audio/audio"
-	"github.com/go-audio/wav"
-	"github.com/orcaman/writerseeker"
 	"io"
-	"io/ioutil"
-	"modernc.org/libc"
-	"modernc.org/libc/sys/types"
 	"silk/internal"
 	"unsafe"
+
+	"modernc.org/libc"
+	"modernc.org/libc/sys/types"
 )
 
 var (
@@ -21,7 +18,7 @@ var (
 	ErrCodecError = errors.New("codec error")
 )
 
-func DecodeSilkBuffToWave(src []byte, sampleRate int) (dst []byte, err error) {
+func DecodeSilkBuffToPcm(src []byte, sampleRate int) (dst []byte, err error) {
 	var tls = libc.NewTLS()
 	reader := bytes.NewBuffer(src)
 	f, err := reader.ReadByte()
@@ -74,20 +71,14 @@ func DecodeSilkBuffToWave(src []byte, sampleRate int) (dst []byte, err error) {
 	// 40ms
 	frameSize := sampleRate / 1000 * 40
 	in := make([]byte, frameSize)
-	buf := make([]int16, frameSize)
-	out := &writerseeker.WriterSeeker{}
-	enc := wav.NewEncoder(out, sampleRate, 16, 1, 1)
-	audioBuf := &audio.IntBuffer{
-		Format: &audio.Format{
-			NumChannels: 1,
-			SampleRate:  sampleRate,
-		},
-	}
+	buf := make([]byte, frameSize)
+	out := &bytes.Buffer{}
 	for {
 		var nByte int16
 		err = binary.Read(reader, binary.LittleEndian, &nByte)
 		if err != nil {
 			if err == io.EOF {
+				err = nil
 				break
 			}
 			return
@@ -98,6 +89,10 @@ func DecodeSilkBuffToWave(src []byte, sampleRate int) (dst []byte, err error) {
 		}
 		n, err = reader.Read(in[:nByte])
 		if err != nil {
+			if err == io.EOF {
+				err = nil
+				break
+			}
 			return
 		}
 		if n != int(nByte) {
@@ -109,41 +104,30 @@ func DecodeSilkBuffToWave(src []byte, sampleRate int) (dst []byte, err error) {
 			uintptr(unsafe.Pointer(&buf[0])),
 			uintptr(unsafe.Pointer(&nByte)))
 
-		for _, w := range buf[:int(nByte)] {
-			audioBuf.Data = append(audioBuf.Data, int(w))
-		}
+		_, _ = out.Write(buf[:nByte*2])
+
 	}
-	if err = enc.Write(audioBuf); err != nil {
-		return
-	}
-	if err = enc.Close(); err != nil {
-		return
-	}
-	dst, err = ioutil.ReadAll(out.Reader())
+	dst = out.Bytes()
 	return
 }
 
-func EncodeWavBuffToSilk(src []byte, bitRate int, tencent bool) (dst []byte, err error) {
+func EncodePcmBuffToSilk(src []byte, sampleRate, bitRate int, tencent bool) (dst []byte, err error) {
 	var tls = libc.NewTLS()
 	var reader = bytes.NewBuffer(src)
 	var encControl internal.SKP_SILK_SDK_EncControlStruct
 	var encStatus internal.SKP_SILK_SDK_EncControlStruct
-	var smplsSinceLastPacket int32
 	var packetSizeMs = int32(20)
 	const (
 		ApiFsHz        = int32(24000)
-		targetRateBps  = 24000
 		packetLossPerc = int32(0)
 	)
 	{ // default setting
-		encControl.FAPI_sampleRate = 24000
+		encControl.FAPI_sampleRate = int32(sampleRate)
 		encControl.FmaxInternalSampleRate = 24000
 		encControl.FpacketSize = (packetSizeMs * ApiFsHz) / 1000
 		encControl.FpacketLossPercentage = packetLossPerc
 		encControl.FuseDTX = 0
 		encControl.Fcomplexity = 2
-		encControl.FbitRate = int32(targetRateBps)
-		encControl.FAPI_sampleRate = 24000
 		encControl.FbitRate = int32(bitRate)
 	}
 	var encSizeBytes int32
@@ -157,22 +141,18 @@ func EncodeWavBuffToSilk(src []byte, bitRate int, tencent bool) (dst []byte, err
 	if ret != 0 {
 		return nil, fmt.Errorf("SKP_Silk_reset_encoder returned %d", ret)
 	}
-	const frameSize = 24000 / 1000 * 40
+	var frameSize = sampleRate / 1000 * 40
 	var (
 		nBytes  = int16(250 * 5)
 		in      = make([]byte, frameSize)
 		payload = make([]byte, nBytes)
-		out     = writerseeker.WriterSeeker{}
+		out     = bytes.Buffer{}
 	)
-	smplsSinceLastPacket = 0
 	if tencent {
 		_, _ = out.Write([]byte("\x02#!SILK_V3"))
 	} else {
 		_, _ = out.Write([]byte("#!SILK_V3"))
 	}
-	defer func() {
-		dst, _ = ioutil.ReadAll(out.BytesReader())
-	}()
 	var counter int
 	for {
 		counter, err = reader.Read(in)
@@ -186,13 +166,13 @@ func EncodeWavBuffToSilk(src []byte, bitRate int, tencent bool) (dst []byte, err
 		if counter < frameSize {
 			break
 		}
-		nBytes = 250 * 5
+		nBytes = int16(frameSize)
 		ret = internal.SKP_Silk_SDK_Encode(
 			tls,
 			psEnc,
 			uintptr(unsafe.Pointer(&encControl)),
 			uintptr(unsafe.Pointer(&in[0])),
-			int32(counter),
+			int32(counter)/2,
 			uintptr(unsafe.Pointer(&payload[0])),
 			uintptr(unsafe.Pointer(&nBytes)),
 		)
@@ -200,21 +180,12 @@ func EncodeWavBuffToSilk(src []byte, bitRate int, tencent bool) (dst []byte, err
 		if ret != 0 {
 			return nil, fmt.Errorf("SKP_Silk_Encode returned %d", ret)
 		}
-
-		packetSizeMs = (1000 * encControl.FpacketSize) / encControl.FAPI_sampleRate
-		smplsSinceLastPacket += int32(counter)
-		if ((1000 * smplsSinceLastPacket) / ApiFsHz) == packetSizeMs {
-			var nByte = make([]byte, 2)
-			binary.LittleEndian.PutUint16(nByte, uint16(nBytes))
-			_, _ = out.Write(nByte[:2])
-			_, _ = out.Write(payload[:nBytes])
-			smplsSinceLastPacket = 0
-		}
+		_ = binary.Write(&out, binary.LittleEndian, nBytes)
+		_, _ = out.Write(payload[:nBytes])
 	}
 	if !tencent {
-		var b []byte
-		binary.LittleEndian.PutUint16(b, ^uint16(0)) // -1
-		_, _ = out.Write(b)
+		_ = binary.Write(&out, binary.LittleEndian, int16(-1))
 	}
+	dst = out.Bytes()
 	return
 }

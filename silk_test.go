@@ -6,20 +6,20 @@ import (
 	"testing"
 )
 
-func TestDecodeSilkBuffToWave(t *testing.T) {
-	b, err := ioutil.ReadFile("test1.silk")
+func TestDecodeSilkBuffToPcm(t *testing.T) {
+	b, err := ioutil.ReadFile("test3.silk")
 	assert.Nil(t, err)
-	dst, err := DecodeSilkBuffToWave(b, 8000)
+	dst, err := DecodeSilkBuffToPcm(b, 24000)
 	assert.Nil(t, err)
-	err = ioutil.WriteFile("test1.wav", dst, 0666)
+	err = ioutil.WriteFile("test3.pcm", dst, 0666)
 	assert.Nil(t, err)
 }
 
 func TestDecodePcmBuffToSilk(t *testing.T) {
-	b, err := ioutil.ReadFile("test.pcm")
+	b, err := ioutil.ReadFile("test3.pcm")
 	assert.Nil(t, err)
-	dst, err := EncodeWavBuffToSilk(b, 24000, true)
+	dst, err := EncodePcmBuffToSilk(b, 24000, 24000, true)
 	assert.Nil(t, err)
-	err = ioutil.WriteFile("test1.silk", dst, 0666)
+	err = ioutil.WriteFile("test4.silk", dst, 0666)
 	assert.Nil(t, err)
 }
