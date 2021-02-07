@@ -8,7 +8,8 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/wdvxdr1123/go-silk/internal"
+	"github.com/wdvxdr1123/go-silk/sdk"
+
 	"modernc.org/libc"
 	"modernc.org/libc/sys/types"
 )
@@ -57,14 +58,14 @@ func DecodeSilkBuffToPcm(src []byte, sampleRate int) (dst []byte, err error) {
 		err = ErrInvalid
 		return
 	}
-	var decControl internal.SKP_SILK_SDK_DecControlStruct
+	var decControl sdk.SKP_SILK_SDK_DecControlStruct
 	decControl.FAPI_sampleRate = int32(sampleRate)
 	decControl.FframesPerPacket = 1
 	var decSize int32
-	internal.SKP_Silk_SDK_Get_Decoder_Size(tls, uintptr(unsafe.Pointer(&decSize)))
+	sdk.SKP_Silk_SDK_Get_Decoder_Size(tls, uintptr(unsafe.Pointer(&decSize)))
 	dec := libc.Xmalloc(tls, types.Size_t(decSize))
 	defer libc.Xfree(tls, dec)
-	if internal.SKP_Silk_init_decoder(tls, dec) != 0 {
+	if sdk.SKP_Silk_init_decoder(tls, dec) != 0 {
 		err = ErrCodecError
 		return
 	}
@@ -99,7 +100,7 @@ func DecodeSilkBuffToPcm(src []byte, sampleRate int) (dst []byte, err error) {
 			err = ErrInvalid
 			return
 		}
-		internal.SKP_Silk_SDK_Decode(tls, dec, uintptr(unsafe.Pointer(&decControl)), 0,
+		sdk.SKP_Silk_SDK_Decode(tls, dec, uintptr(unsafe.Pointer(&decControl)), 0,
 			uintptr(unsafe.Pointer(&in[0])), int32(n),
 			uintptr(unsafe.Pointer(&buf[0])),
 			uintptr(unsafe.Pointer(&nByte)))
@@ -114,30 +115,27 @@ func DecodeSilkBuffToPcm(src []byte, sampleRate int) (dst []byte, err error) {
 func EncodePcmBuffToSilk(src []byte, sampleRate, bitRate int, tencent bool) (dst []byte, err error) {
 	var tls = libc.NewTLS()
 	var reader = bytes.NewBuffer(src)
-	var encControl internal.SKP_SILK_SDK_EncControlStruct
-	var encStatus internal.SKP_SILK_SDK_EncControlStruct
+	var encControl sdk.SKP_SILK_SDK_EncControlStruct
+	var encStatus sdk.SKP_SILK_SDK_EncControlStruct
 	var packetSizeMs = int32(20)
-	const (
-		ApiFsHz        = int32(24000)
-		packetLossPerc = int32(0)
-	)
 	{ // default setting
 		encControl.FAPI_sampleRate = int32(sampleRate)
 		encControl.FmaxInternalSampleRate = 24000
-		encControl.FpacketSize = (packetSizeMs * ApiFsHz) / 1000
-		encControl.FpacketLossPercentage = packetLossPerc
+		encControl.FpacketSize = (packetSizeMs * int32(sampleRate)) / 1000
+		encControl.FpacketLossPercentage = int32(0)
+		encControl.FuseInBandFEC = 0
 		encControl.FuseDTX = 0
 		encControl.Fcomplexity = 2
 		encControl.FbitRate = int32(bitRate)
 	}
 	var encSizeBytes int32
-	ret := internal.SKP_Silk_SDK_Get_Encoder_Size(tls, uintptr(unsafe.Pointer(&encSizeBytes)))
+	ret := sdk.SKP_Silk_SDK_Get_Encoder_Size(tls, uintptr(unsafe.Pointer(&encSizeBytes)))
 	if ret != 0 {
 		return nil, fmt.Errorf("SKP_Silk_create_encoder returned %d", ret)
 	}
 	psEnc := libc.Xmalloc(tls, types.Size_t(encSizeBytes))
 	defer libc.Xfree(tls, psEnc)
-	ret = internal.SKP_Silk_SDK_InitEncoder(tls, psEnc, uintptr(unsafe.Pointer(&encStatus)))
+	ret = sdk.SKP_Silk_SDK_InitEncoder(tls, psEnc, uintptr(unsafe.Pointer(&encStatus)))
 	if ret != 0 {
 		return nil, fmt.Errorf("SKP_Silk_reset_encoder returned %d", ret)
 	}
@@ -166,8 +164,8 @@ func EncodePcmBuffToSilk(src []byte, sampleRate, bitRate int, tencent bool) (dst
 		if counter < frameSize {
 			break
 		}
-		nBytes = int16(frameSize)
-		ret = internal.SKP_Silk_SDK_Encode(
+		nBytes = int16(1250)
+		ret = sdk.SKP_Silk_SDK_Encode(
 			tls,
 			psEnc,
 			uintptr(unsafe.Pointer(&encControl)),
