@@ -16,7 +16,7 @@ func TestDecodeSilkBuffToPcm(t *testing.T) {
 }
 
 func TestDecodePcmBuffToSilk(t *testing.T) {
-	b, err := ioutil.ReadFile("test3.pcm")
+	b, err := ioutil.ReadFile("xcz.pcm")
 	assert.Nil(t, err)
 	dst, err := EncodePcmBuffToSilk(b, 24000, 24000, true)
 	assert.Nil(t, err)
